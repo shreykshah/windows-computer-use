@@ -1,0 +1,21 @@
+# Core dependencies
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+langchain-core>=0.1.0
+asyncio>=3.4.3
+
+# LLM providers
+langchain-openai>=0.0.5
+langchain-anthropic>=0.1.0
+openai>=1.0.0
+
+# Windows UI Automation
+uiautomation>=2.0.0; platform_system=="Windows"
+pywinauto>=0.6.8; platform_system=="Windows"
+comtypes>=1.1.14; platform_system=="Windows"
+
+# Image handling
+pillow>=10.0.0
+
+# Utility
+tqdm>=4.66.0
