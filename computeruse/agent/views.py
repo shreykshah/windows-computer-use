@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from openai import RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
-from computeruse.dom.history_tree_processor.service import DOMHistoryElement
+from computeruse.dom.history_tree_processor.service import DOMHistoryElement, HistoryTreeProcessor
 from computeruse.dom.views import DOMElementNode, SelectorMap
 from computeruse.controller.registry.views import ActionModel
 
@@ -159,7 +159,7 @@ class AgentHistory(BaseModel):
             index = action.get_index()
             if index and index in selector_map:
                 el: DOMElementNode = selector_map[index]
-                elements.append(DOMHistoryElement.from_dom_element(el))
+                elements.append(HistoryTreeProcessor.convert_dom_element_to_history_element(el))
             else:
                 elements.append(None)
         return elements

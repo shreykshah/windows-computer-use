@@ -174,11 +174,12 @@ class Controller(Generic[Context]):
         @self.registry.action('Click UI element', param_model=ClickElementAction)
         async def click_element(params: ClickElementAction, windows_context: WindowsContext):
             session = await windows_context.get_session()
-
-            if params.index not in await windows_context.get_selector_map():
+            
+            selector_map = await windows_context.get_selector_map()
+            if params.index not in selector_map:
                 raise Exception(f'Element with index {params.index} does not exist - retry or use alternative actions')
 
-            element_node = await windows_context.get_selector_map()[params.index]
+            element_node = selector_map[params.index]
             
             # Find the actual UIA element
             auto = windows_context.windows.auto
@@ -249,10 +250,11 @@ class Controller(Generic[Context]):
             param_model=InputTextAction,
         )
         async def input_text(params: InputTextAction, windows_context: WindowsContext):
-            if params.index not in await windows_context.get_selector_map():
+            selector_map = await windows_context.get_selector_map()
+            if params.index not in selector_map:
                 raise Exception(f'Element index {params.index} does not exist - retry or use alternative actions')
 
-            element_node = await windows_context.get_selector_map()[params.index]
+            element_node = selector_map[params.index]
             
             # Find the actual UIA element
             auto = windows_context.windows.auto
@@ -328,6 +330,69 @@ class Controller(Generic[Context]):
                 return ActionResult(error=f"Failed to switch to window {params.window_id}")
 
         # Special Key Actions
+        def _process_special_keys(keys_string):
+            """
+            Process special keys to ensure they're correctly handled.
+            Properly formats special keys for the uiautomation library.
+            """
+            # Replace problematic sequences with properly escaped versions
+            # In UI Automation, braces must be escaped as {{ and }}
+            special_keys = {
+                "{BACKSPACE}": "{BACKSPACE}",
+                "{DELETE}": "{DELETE}",
+                "{DEL}": "{DELETE}",
+                "{TAB}": "{TAB}",
+                "{ENTER}": "{ENTER}",
+                "{ESC}": "{ESC}",
+                "{UP}": "{UP}",
+                "{DOWN}": "{DOWN}",
+                "{LEFT}": "{LEFT}",
+                "{RIGHT}": "{RIGHT}",
+                "{HOME}": "{HOME}",
+                "{END}": "{END}",
+                "{PGUP}": "{PGUP}",
+                "{PGDN}": "{PGDN}",
+                "{F1}": "{F1}",
+                "{F2}": "{F2}",
+                "{F3}": "{F3}",
+                "{F4}": "{F4}",
+                "{F5}": "{F5}",
+                "{F6}": "{F6}",
+                "{F7}": "{F7}",
+                "{F8}": "{F8}",
+                "{F9}": "{F9}",
+                "{F10}": "{F10}",
+                "{F11}": "{F11}",
+                "{F12}": "{F12}",
+                "{SPACE}": " "
+            }
+            
+            # First, protect already properly escaped braces
+            keys_string = keys_string.replace("{{", "<<<OPENBRACE>>>")
+            keys_string = keys_string.replace("}}", "<<<CLOSEBRACE>>>")
+            
+            # Now, check for common special keys and replace them appropriately
+            for special_key, replacement in special_keys.items():
+                if special_key in keys_string:
+                    # For special keys, we need to handle them specifically
+                    # Replace with the key name without braces, we'll add proper formatting later
+                    keys_string = keys_string.replace(special_key, f"<<<{special_key[1:-1]}>>>")
+            
+            # Restore protected braces
+            keys_string = keys_string.replace("<<<OPENBRACE>>>", "{{")
+            keys_string = keys_string.replace("<<<CLOSEBRACE>>>", "}}")
+            
+            # Replace all other braces with escaped versions
+            keys_string = keys_string.replace("{", "{{")
+            keys_string = keys_string.replace("}", "}}")
+            
+            # Now restore special keys with properly formatted versions
+            for special_key in special_keys:
+                key_name = special_key[1:-1]  # Remove the braces
+                keys_string = keys_string.replace(f"<<<{key_name}>>>", special_key)
+            
+            return keys_string
+            
         @self.registry.action(
             'Send keyboard keys like Escape, Enter, Tab or keyboard shortcuts like Alt+Tab, Ctrl+C',
             param_model=SendKeysAction,
@@ -338,9 +403,34 @@ class Controller(Generic[Context]):
                 if not auto:
                     return ActionResult(error="UI Automation not available")
                 
-                # Send the keys
-                auto.SendKeys(params.keys)
+                # Process key string to handle special characters correctly
+                keys_to_send = params.keys
                 
+                # Handle special characters in keys - we'll remove braces handling as the library will
+                # process these itself, just making sure we don't have malformed sequences
+                if "{" in keys_to_send:
+                    try:
+                        # Try to safely process the keys
+                        keys_to_send = _process_special_keys(keys_to_send)
+                    except Exception as key_error:
+                        logger.error(f"Error processing keys: {key_error}")
+                        # Fall back to simple approach - send without special handling
+                        keys_to_send = params.keys
+                
+                try:
+                    # Send the processed keys in a single operation
+                    auto.SendKeys(keys_to_send)
+                except Exception as send_error:
+                    logger.warning(f"Error sending keys as batch, trying character by character: {send_error}")
+                    # Fall back to sending one character at a time
+                    for char in params.keys:
+                        if char not in ['{', '}']:  # Skip braces as they're problematic
+                            try:
+                                auto.SendKeys(char)
+                                await asyncio.sleep(0.01)  # Small delay between keys
+                            except Exception as char_error:
+                                logger.error(f"Error sending character '{char}': {char_error}")
+
                 msg = f'⌨️ Sent keys: {params.keys}'
                 logger.info(msg)
                 await asyncio.sleep(windows_context.config.wait_between_actions)
@@ -355,11 +445,12 @@ class Controller(Generic[Context]):
         )
         async def right_click(params: RightClickAction, windows_context: WindowsContext):
             session = await windows_context.get_session()
-
-            if params.index not in await windows_context.get_selector_map():
+            
+            selector_map = await windows_context.get_selector_map()
+            if params.index not in selector_map:
                 raise Exception(f'Element with index {params.index} does not exist - retry or use alternative actions')
 
-            element_node = await windows_context.get_selector_map()[params.index]
+            element_node = selector_map[params.index]
             
             # Find the actual UIA element
             auto = windows_context.windows.auto
@@ -437,11 +528,12 @@ class Controller(Generic[Context]):
         )
         async def double_click(params: DoubleClickAction, windows_context: WindowsContext):
             session = await windows_context.get_session()
-
-            if params.index not in await windows_context.get_selector_map():
+            
+            selector_map = await windows_context.get_selector_map()
+            if params.index not in selector_map:
                 raise Exception(f'Element with index {params.index} does not exist - retry or use alternative actions')
 
-            element_node = await windows_context.get_selector_map()[params.index]
+            element_node = selector_map[params.index]
             
             # Find the actual UIA element
             auto = windows_context.windows.auto
@@ -535,7 +627,11 @@ class Controller(Generic[Context]):
                     is_visible = hasattr(c, 'IsVisible') and c.IsVisible if hasattr(c, 'IsVisible') else True
                     return has_scroll and is_visible
                 
-                scrollable = auto.FindControl(is_scrollable_and_visible, searchFromControl=window)
+                try:
+                    scrollable = auto.FindControl(is_scrollable_and_visible, searchDepth=3)
+                except Exception as e:
+                    logger.debug(f"Error finding scrollable element: {e}")
+                    scrollable = None
                 
                 if not scrollable:
                     # If no scrollable element found, try to use mouse wheel
@@ -713,19 +809,43 @@ class Controller(Generic[Context]):
                     return ActionResult(error="Invalid menu path format. Use 'Menu>Submenu>Command'")
                 
                 # First, find the menu bar
-                menu_bar = auto.FindControl(
-                    lambda c: c.ControlType == auto.ControlType.MenuBar and c.IsVisible,
-                    searchFromControl=window
-                )
+                try:
+                    # First try with default parameters - no need for searchDepth at first
+                    menu_bar = auto.FindControl(
+                        lambda c: c.ControlType == auto.ControlType.MenuBar and c.IsVisible
+                    )
+                except Exception as e:
+                    logger.debug(f"Error finding menu bar with default parameters: {e}")
+                    try:
+                        # Try with searchDepth=1 as a fallback
+                        menu_bar = auto.FindControl(
+                            lambda c: c.ControlType == auto.ControlType.MenuBar and c.IsVisible,
+                            searchDepth=1
+                        )
+                    except Exception as e2:
+                        logger.debug(f"Error finding menu bar with searchDepth=1: {e2}")
+                        menu_bar = None
                 
                 if not menu_bar:
                     # Try alternative approach - just click on the first menu item
                     # This may work for ribbon interfaces where the menu bar isn't a standard control
                     main_menu_name = menu_parts[0].strip()
-                    main_menu = auto.FindControl(
-                        lambda c: c.Name == main_menu_name and c.IsVisible,
-                        searchFromControl=window
-                    )
+                    try:
+                        # Try with simple filter first
+                        main_menu = auto.FindControl(
+                            lambda c: c.Name == main_menu_name and c.IsVisible
+                        )
+                    except Exception as e:
+                        logger.debug(f"Error finding main menu with simple filter: {e}")
+                        try:
+                            # Try with searchDepth=2
+                            main_menu = auto.FindControl(
+                                lambda c: c.Name == main_menu_name and c.IsVisible,
+                                searchDepth=2
+                            )
+                        except Exception as e2:
+                            logger.debug(f"Error finding main menu with searchDepth=2: {e2}")
+                            main_menu = None
                     
                     if not main_menu:
                         # As last resort, try Alt key activation
@@ -769,10 +889,14 @@ class Controller(Generic[Context]):
                     # Standard menu navigation
                     # First menu item
                     main_menu_name = menu_parts[0].strip()
-                    main_menu = auto.FindControl(
-                        lambda c: c.Name == main_menu_name and c.IsVisible,
-                        searchFromControl=menu_bar
-                    )
+                    try:
+                        main_menu = auto.FindControl(
+                            lambda c: c.Name == main_menu_name and c.IsVisible,
+                            searchDepth=2
+                        )
+                    except Exception as e:
+                        logger.debug(f"Error finding main menu from menu bar: {e}")
+                        main_menu = None
                     
                     if not main_menu:
                         return ActionResult(error=f"Could not find menu '{main_menu_name}'")
@@ -787,10 +911,14 @@ class Controller(Generic[Context]):
                         item_name = menu_parts[i].strip()
                         
                         # Find submenu item
-                        menu_item = auto.FindControl(
-                            lambda c: c.Name == item_name and c.IsVisible,
-                            searchFromControl=window
-                        )
+                        try:
+                            menu_item = auto.FindControl(
+                                lambda c: c.Name == item_name and c.IsVisible,
+                                searchDepth=3
+                            )
+                        except Exception as e:
+                            logger.debug(f"Error finding menu item: {e}")
+                            menu_item = None
                         
                         if not menu_item:
                             return ActionResult(error=f"Could not find menu item '{item_name}'")
