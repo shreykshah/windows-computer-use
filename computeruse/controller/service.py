@@ -8,7 +8,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel
 
-from computeruse.agent.views import ActionModel, ActionResult
+from computeruse.agent.views import ActionResult
+from computeruse.controller.registry.views import ActionModel
 from computeruse.controller.registry.service import Registry
 from computeruse.controller.views import (
     ClickElementAction,
@@ -190,23 +191,40 @@ class Controller(Generic[Context]):
                 control_type = element_node.tag_name
                 name = element_node.attributes.get("Name", "")
                 automation_id = element_node.attributes.get("AutomationId", "")
+                class_name = element_node.attributes.get("ClassName", "")
                 
                 # Attempt to find element using different properties
                 element = None
                 if automation_id:
                     # Try by AutomationId first (most reliable)
-                    element = auto.FindControl(lambda c: c.AutomationId == automation_id)
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'AutomationId') and c.AutomationId == automation_id)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by AutomationId: {e}")
                 
                 if not element and name:
                     # Try by Name
-                    element = auto.FindControl(lambda c: c.Name == name)
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'Name') and c.Name == name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by Name: {e}")
+                
+                if not element and class_name:
+                    # Try by ClassName
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'ClassName') and c.ClassName == class_name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by ClassName: {e}")
                 
                 if not element and control_type:
                     # Try by control type and other properties
-                    element = auto.FindControl(
-                        lambda c: c.GetControlTypeName() == control_type and 
-                                  (not name or c.Name == name)
-                    )
+                    try:
+                        element = auto.FindControl(
+                            lambda c: hasattr(c, 'GetControlTypeName') and c.GetControlTypeName() == control_type and 
+                                      (not name or (hasattr(c, 'Name') and c.Name == name))
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by control type: {e}")
                 
                 if not element:
                     return ActionResult(error=f"Could not find UI element with index {params.index}")
@@ -246,19 +264,39 @@ class Controller(Generic[Context]):
                 automation_id = element_node.attributes.get("AutomationId", "")
                 name = element_node.attributes.get("Name", "")
                 control_type = element_node.tag_name
+                class_name = element_node.attributes.get("ClassName", "")
                 
                 element = None
                 if automation_id:
-                    element = auto.FindControl(lambda c: c.AutomationId == automation_id)
+                    # Try by AutomationId first (most reliable)
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'AutomationId') and c.AutomationId == automation_id)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by AutomationId: {e}")
                 
                 if not element and name:
-                    element = auto.FindControl(lambda c: c.Name == name)
+                    # Try by Name
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'Name') and c.Name == name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by Name: {e}")
+                
+                if not element and class_name:
+                    # Try by ClassName
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'ClassName') and c.ClassName == class_name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by ClassName: {e}")
                 
                 if not element and control_type:
-                    element = auto.FindControl(
-                        lambda c: c.GetControlTypeName() == control_type and 
-                                  (not name or c.Name == name)
-                    )
+                    # Try by control type and other properties
+                    try:
+                        element = auto.FindControl(
+                            lambda c: hasattr(c, 'GetControlTypeName') and c.GetControlTypeName() == control_type and 
+                                      (not name or (hasattr(c, 'Name') and c.Name == name))
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by control type: {e}")
                 
                 if not element:
                     return ActionResult(error=f"Could not find UI element with index {params.index}")
@@ -333,19 +371,39 @@ class Controller(Generic[Context]):
                 automation_id = element_node.attributes.get("AutomationId", "")
                 name = element_node.attributes.get("Name", "")
                 control_type = element_node.tag_name
+                class_name = element_node.attributes.get("ClassName", "")
                 
                 element = None
                 if automation_id:
-                    element = auto.FindControl(lambda c: c.AutomationId == automation_id)
+                    # Try by AutomationId first (most reliable)
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'AutomationId') and c.AutomationId == automation_id)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by AutomationId: {e}")
                 
                 if not element and name:
-                    element = auto.FindControl(lambda c: c.Name == name)
+                    # Try by Name
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'Name') and c.Name == name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by Name: {e}")
+                
+                if not element and class_name:
+                    # Try by ClassName
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'ClassName') and c.ClassName == class_name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by ClassName: {e}")
                 
                 if not element and control_type:
-                    element = auto.FindControl(
-                        lambda c: c.GetControlTypeName() == control_type and 
-                                  (not name or c.Name == name)
-                    )
+                    # Try by control type and other properties
+                    try:
+                        element = auto.FindControl(
+                            lambda c: hasattr(c, 'GetControlTypeName') and c.GetControlTypeName() == control_type and 
+                                      (not name or (hasattr(c, 'Name') and c.Name == name))
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by control type: {e}")
                 
                 if not element:
                     return ActionResult(error=f"Could not find UI element with index {params.index}")
@@ -395,19 +453,39 @@ class Controller(Generic[Context]):
                 automation_id = element_node.attributes.get("AutomationId", "")
                 name = element_node.attributes.get("Name", "")
                 control_type = element_node.tag_name
+                class_name = element_node.attributes.get("ClassName", "")
                 
                 element = None
                 if automation_id:
-                    element = auto.FindControl(lambda c: c.AutomationId == automation_id)
+                    # Try by AutomationId first (most reliable)
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'AutomationId') and c.AutomationId == automation_id)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by AutomationId: {e}")
                 
                 if not element and name:
-                    element = auto.FindControl(lambda c: c.Name == name)
+                    # Try by Name
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'Name') and c.Name == name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by Name: {e}")
+                
+                if not element and class_name:
+                    # Try by ClassName
+                    try:
+                        element = auto.FindControl(lambda c: hasattr(c, 'ClassName') and c.ClassName == class_name)
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by ClassName: {e}")
                 
                 if not element and control_type:
-                    element = auto.FindControl(
-                        lambda c: c.GetControlTypeName() == control_type and 
-                                  (not name or c.Name == name)
-                    )
+                    # Try by control type and other properties
+                    try:
+                        element = auto.FindControl(
+                            lambda c: hasattr(c, 'GetControlTypeName') and c.GetControlTypeName() == control_type and 
+                                      (not name or (hasattr(c, 'Name') and c.Name == name))
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to find element by control type: {e}")
                 
                 if not element:
                     return ActionResult(error=f"Could not find UI element with index {params.index}")
@@ -451,10 +529,13 @@ class Controller(Generic[Context]):
                     return ActionResult(error="No active window to scroll")
                 
                 # Find scrollable element
-                scrollable = auto.FindControl(
-                    lambda c: c.IsScrollPatternAvailable() and c.IsVisible, 
-                    searchFromControl=window
-                )
+                # Define a safer condition function that handles missing attributes
+                def is_scrollable_and_visible(c):
+                    has_scroll = hasattr(c, 'IsScrollPatternAvailable') and c.IsScrollPatternAvailable()
+                    is_visible = hasattr(c, 'IsVisible') and c.IsVisible if hasattr(c, 'IsVisible') else True
+                    return has_scroll and is_visible
+                
+                scrollable = auto.FindControl(is_scrollable_and_visible, searchFromControl=window)
                 
                 if not scrollable:
                     # If no scrollable element found, try to use mouse wheel

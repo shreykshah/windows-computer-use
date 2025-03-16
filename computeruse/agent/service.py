@@ -19,6 +19,7 @@ from langchain_core.messages import (
 from pydantic import BaseModel, ValidationError
 
 from computeruse.agent.message_manager.service import MessageManager, MessageManagerSettings
+from computeruse.agent.message_manager.views import MessageManagerState
 from computeruse.agent.message_manager.utils import convert_input_messages, extract_json_from_model_output, save_conversation
 from computeruse.agent.prompts import AgentMessagePrompt, SystemPrompt
 from computeruse.agent.views import (
@@ -167,7 +168,7 @@ class Agent(Generic[Context]):
                 sensitive_data=sensitive_data,
                 available_file_paths=self.settings.available_file_paths,
             ),
-            state=message_manager_state or MessageManagerSettings(),
+            state=message_manager_state or MessageManagerState(),
         )
 
         # Windows UIA setup
@@ -241,6 +242,8 @@ class Agent(Generic[Context]):
                 return 'function_calling'
             elif self.chat_model_library == 'AzureChatOpenAI':
                 return 'function_calling'
+            elif self.chat_model_library == 'AzureAuthChatOpenAI':
+                return 'function_calling'
             else:
                 return None
         else:
@@ -263,7 +266,7 @@ class Agent(Generic[Context]):
     @time_execution_async('--step (agent)')
     async def step(self, step_info: Optional[AgentStepInfo] = None) -> None:
         """Execute one step of the task"""
-        logger.info(f'📍 Step {self.state.n_steps}')
+        logger.info(f'📍 Step {self.state.n_steps} - Starting execution')
         state = None
         model_output = None
         result: list[ActionResult] = []
@@ -271,34 +274,93 @@ class Agent(Generic[Context]):
         tokens = 0
 
         try:
-            state = await self.windows_context.get_state()
+            # Phase 1: Get current UI state
+            logger.debug("Step phase 1: Getting UI state")
+            try:
+                state = await self.windows_context.get_state()
+                if state:
+                    logger.debug(f"Got UI state: window title={state.title}, process={state.process_name}")
+                    if state.element_tree:
+                        logger.debug(f"Element tree contains {len(state.selector_map)} interactive elements")
+                    else:
+                        logger.warning("Element tree is empty")
+                else:
+                    logger.warning("Failed to get UI state (returned None)")
+            except Exception as state_error:
+                logger.error(f"Error getting UI state: {state_error}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                raise
 
+            # Check if agent is stopped or paused
             await self._raise_if_stopped_or_paused()
 
-            self._message_manager.add_state_message(state, self.state.last_result, step_info, self.settings.use_vision)
-
-            # Run planner at specified intervals if planner is configured
-            if self.settings.planner_llm and self.state.n_steps % self.settings.planner_interval == 0:
-                plan = await self._run_planner()
-                # add plan before last state message
-                self._message_manager.add_plan(plan, position=-1)
-
-            if step_info and step_info.is_last_step():
-                # Add last step warning if needed
-                msg = 'Now comes your last step. Use only the "done" action now. No other actions - so here your action sequence must have length 1.'
-                msg += '\nIf the task is not yet fully finished as requested by the user, set success in "done" to false! E.g. if not all steps are fully completed.'
-                msg += '\nIf the task is fully finished, set success in "done" to true.'
-                msg += '\nInclude everything you found out for the ultimate task in the done text.'
-                logger.info('Last step finishing up')
-                self._message_manager._add_message_with_tokens(HumanMessage(content=msg))
-                self.AgentOutput = self.DoneAgentOutput
-
-            input_messages = self._message_manager.get_messages()
-            tokens = self._message_manager.state.history.current_tokens
-
+            # Phase 2: Add state message to history
+            logger.debug("Step phase 2: Adding state message to history")
             try:
-                model_output = await self.get_next_action(input_messages)
+                self._message_manager.add_state_message(state, self.state.last_result, step_info, self.settings.use_vision)
+                logger.debug("State message added to history")
+            except Exception as msg_error:
+                logger.error(f"Error adding state message: {msg_error}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                raise
 
+            # Phase 3: Run planner if configured
+            if self.settings.planner_llm and self.state.n_steps % self.settings.planner_interval == 0:
+                logger.debug("Step phase 3: Running planner")
+                try:
+                    plan = await self._run_planner()
+                    if plan:
+                        logger.debug(f"Planner generated a plan: {plan[:100]}...")
+                        # add plan before last state message
+                        self._message_manager.add_plan(plan, position=-1)
+                    else:
+                        logger.warning("Planner returned None")
+                except Exception as planner_error:
+                    logger.error(f"Error running planner: {planner_error}")
+                    import traceback
+                    logger.error(f"Stack trace: {traceback.format_exc()}")
+                    # Continue despite planner error
+
+            # Phase 4: Prepare for last step if needed
+            if step_info and step_info.is_last_step():
+                logger.info("Step phase 4: Preparing for final step")
+                try:
+                    # Add last step warning if needed
+                    msg = 'Now comes your last step. Use only the "done" action now. No other actions - so here your action sequence must have length 1.'
+                    msg += '\nIf the task is not yet fully finished as requested by the user, set success in "done" to false! E.g. if not all steps are fully completed.'
+                    msg += '\nIf the task is fully finished, set success in "done" to true.'
+                    msg += '\nInclude everything you found out for the ultimate task in the done text.'
+                    logger.info('Last step finishing up')
+                    self._message_manager._add_message_with_tokens(HumanMessage(content=msg))
+                    self.AgentOutput = self.DoneAgentOutput
+                    logger.debug("Added last step message and set DoneAgentOutput")
+                except Exception as last_step_error:
+                    logger.error(f"Error preparing for last step: {last_step_error}")
+                    import traceback
+                    logger.error(f"Stack trace: {traceback.format_exc()}")
+                    # Continue despite last step error
+
+            # Phase 5: Get input messages
+            logger.debug("Step phase 5: Getting input messages")
+            try:
+                input_messages = self._message_manager.get_messages()
+                tokens = self._message_manager.state.history.current_tokens
+                logger.debug(f"Got {len(input_messages)} input messages with {tokens} tokens")
+            except Exception as messages_error:
+                logger.error(f"Error getting input messages: {messages_error}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                raise
+
+            # Phase 6: Get next action from LLM
+            logger.debug("Step phase 6: Getting next action from LLM")
+            try:
+                logger.info(f"Requesting next action from {self.model_name}")
+                model_output = await self.get_next_action(input_messages)
+                logger.info(f"LLM returned {len(model_output.action)} actions")
+                
                 self.state.n_steps += 1
 
                 if self.register_new_step_callback:
@@ -307,52 +369,111 @@ class Agent(Generic[Context]):
                 if self.settings.save_conversation_path:
                     target = self.settings.save_conversation_path + f'_{self.state.n_steps}.txt'
                     save_conversation(input_messages, model_output, target, self.settings.save_conversation_path_encoding)
+                    logger.debug(f"Saved conversation to {target}")
 
-                self._message_manager._remove_last_state_message()  # we dont want the whole state in the chat history
+                # Remove state message from history to save tokens
+                self._message_manager._remove_last_state_message()
+                logger.debug("Removed state message from history")
 
                 await self._raise_if_stopped_or_paused()
 
+                # Add model output to message history
                 self._message_manager.add_model_output(model_output)
-            except Exception as e:
+                logger.debug("Added model output to message history")
+                
+            except Exception as model_error:
+                logger.error(f"Error getting next action from LLM: {model_error}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
                 # model call failed, remove last state message from history
                 self._message_manager._remove_last_state_message()
-                raise e
+                logger.debug("Removed state message from history due to error")
+                raise model_error
 
-            result: list[ActionResult] = await self.multi_act(model_output.action)
+            # Phase 7: Execute actions
+            logger.debug("Step phase 7: Executing actions")
+            try:
+                if not model_output or not model_output.action:
+                    logger.warning("No actions to execute")
+                    result = []
+                else:
+                    logger.info(f"Executing {len(model_output.action)} actions")
+                    result = await self.multi_act(model_output.action)
+                    logger.info(f"Actions executed with {len(result)} results")
+                    
+                    # Log action results
+                    for i, res in enumerate(result):
+                        if res.error:
+                            logger.warning(f"Action {i+1} failed: {res.error}")
+                        elif res.is_done:
+                            logger.info(f"Action {i+1} marked as done: {res.extracted_content}")
+                        else:
+                            logger.info(f"Action {i+1} succeeded")
 
-            self.state.last_result = result
+                self.state.last_result = result
 
-            if len(result) > 0 and result[-1].is_done:
-                logger.info(f'📄 Result: {result[-1].extracted_content}')
+                if len(result) > 0 and result[-1].is_done:
+                    logger.info(f'📄 Final result: {result[-1].extracted_content}')
 
-            self.state.consecutive_failures = 0
+                self.state.consecutive_failures = 0
+                
+            except Exception as action_error:
+                logger.error(f"Error executing actions: {action_error}")
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                raise action_error
 
         except InterruptedError:
-            logger.debug('Agent paused')
+            logger.info('Agent step interrupted/paused')
             self.state.last_result = [
                 ActionResult(
-                    error='The agent was paused - now continuing actions might need to be repeated', include_in_memory=True
+                    error='The agent was paused - now continuing actions might need to be repeated', 
+                    include_in_memory=True
                 )
             ]
             return
         except Exception as e:
-            result = await self._handle_step_error(e)
-            self.state.last_result = result
+            logger.error(f"Unhandled exception in step: {e}")
+            import traceback
+            logger.error(f"Stack trace: {traceback.format_exc()}")
+            try:
+                result = await self._handle_step_error(e)
+                self.state.last_result = result
+            except Exception as handle_error:
+                logger.error(f"Error handling step error: {handle_error}")
+                # Create a minimal error result if error handling fails
+                self.state.last_result = [
+                    ActionResult(
+                        error=f'Unhandled error: {str(e)}', 
+                        include_in_memory=True
+                    )
+                ]
 
         finally:
+            # Record step completion
             step_end_time = time.time()
+            step_duration = step_end_time - step_start_time
+            logger.info(f'Step {self.state.n_steps} completed in {step_duration:.2f}s')
             
             if not result:
+                logger.warning("Step completed with no results")
                 return
 
+            # Create history item
             if state:
-                metadata = StepMetadata(
-                    step_number=self.state.n_steps,
-                    step_start_time=step_start_time,
-                    step_end_time=step_end_time,
-                    input_tokens=tokens,
-                )
-                self._make_history_item(model_output, state, result, metadata)
+                try:
+                    metadata = StepMetadata(
+                        step_number=self.state.n_steps,
+                        step_start_time=step_start_time,
+                        step_end_time=step_end_time,
+                        input_tokens=tokens,
+                    )
+                    self._make_history_item(model_output, state, result, metadata)
+                    logger.debug("Added history item")
+                except Exception as history_error:
+                    logger.error(f"Error creating history item: {history_error}")
+                    import traceback
+                    logger.error(f"Stack trace: {traceback.format_exc()}")
 
     @time_execution_async('--handle_step_error (agent)')
     async def _handle_step_error(self, error: Exception) -> list[ActionResult]:
@@ -435,38 +556,94 @@ class Agent(Generic[Context]):
     @time_execution_async('--get_next_action (agent)')
     async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
         """Get next action from LLM based on current state"""
-        input_messages = self._convert_input_messages(input_messages)
-
-        if self.tool_calling_method == 'raw':
-            output = self.llm.invoke(input_messages)
-            # TODO: currently invoke does not return reasoning_content, we should override invoke
-            output.content = self._remove_think_tags(str(output.content))
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
             try:
-                parsed_json = extract_json_from_model_output(output.content)
-                parsed = self.AgentOutput(**parsed_json)
-            except (ValueError, ValidationError) as e:
-                logger.warning(f'Failed to parse model output: {output} {str(e)}')
-                raise ValueError('Could not parse response.')
-
-        elif self.tool_calling_method is None:
-            structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
-            response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
-            parsed: AgentOutput | None = response['parsed']
-        else:
-            structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True, method=self.tool_calling_method)
-            response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
-            parsed: AgentOutput | None = response['parsed']
-
-        if parsed is None:
-            raise ValueError('Could not parse response.')
-
-        # cut the number of actions to max_actions_per_step if needed
-        if len(parsed.action) > self.settings.max_actions_per_step:
-            parsed.action = parsed.action[: self.settings.max_actions_per_step]
-
-        self._log_response(parsed)
-
-        return parsed
+                input_messages = self._convert_input_messages(input_messages)
+                
+                # Log the model and method being used
+                logger.debug(f"Using model: {self.model_name} with method: {self.tool_calling_method}")
+                
+                if self.tool_calling_method == 'raw':
+                    output = self.llm.invoke(input_messages)
+                    # Remove think tags from response
+                    output.content = self._remove_think_tags(str(output.content))
+                    try:
+                        parsed_json = extract_json_from_model_output(output.content)
+                        parsed = self.AgentOutput(**parsed_json)
+                    except (ValueError, ValidationError) as e:
+                        logger.warning(f'Failed to parse model output: {output} {str(e)}')
+                        raise ValueError(f'Could not parse response: {str(e)}')
+                
+                elif self.tool_calling_method is None:
+                    structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
+                    response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
+                    parsed: AgentOutput | None = response.get('parsed')
+                else:
+                    # For function_calling (used with Azure OpenAI)
+                    try:
+                        structured_llm = self.llm.with_structured_output(
+                            self.AgentOutput, 
+                            include_raw=True, 
+                            method=self.tool_calling_method
+                        )
+                        
+                        # Structured output with Azure OpenAI
+                        logger.debug(f"Sending request to {self.chat_model_library} with {len(input_messages)} messages")
+                        response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
+                        parsed: AgentOutput | None = response.get('parsed')
+                        
+                        # When using Azure, also check the raw response if parsed fails
+                        if parsed is None and 'raw' in response and self.chat_model_library in ['AzureChatOpenAI', 'AzureAuthChatOpenAI']:
+                            logger.warning("Parsed response is None, trying to extract from raw response")
+                            raw_response = response.get('raw')
+                            if hasattr(raw_response, 'content') and raw_response.content:
+                                try:
+                                    json_content = extract_json_from_model_output(raw_response.content)
+                                    parsed = self.AgentOutput(**json_content)
+                                    logger.info("Successfully extracted JSON from raw content")
+                                except Exception as json_err:
+                                    logger.warning(f"Failed to extract JSON from raw content: {json_err}")
+                    except Exception as e:
+                        logger.error(f"Error with structured output: {e}")
+                        if "tools and function" in str(e).lower() and retry_count < max_retries - 1:
+                            logger.warning("Tool format error detected, retrying with unstructured output")
+                            try:
+                                # Fallback to raw output if structured output fails
+                                output = await self.llm.ainvoke(input_messages)
+                                output_content = str(output.content)
+                                parsed_json = extract_json_from_model_output(output_content)
+                                parsed = self.AgentOutput(**parsed_json)
+                            except Exception as fallback_err:
+                                logger.error(f"Fallback extraction failed: {fallback_err}")
+                                raise
+                        else:
+                            raise
+                
+                if parsed is None:
+                    raise ValueError('Could not parse response, parsed output is None')
+                
+                # cut the number of actions to max_actions_per_step if needed
+                if len(parsed.action) > self.settings.max_actions_per_step:
+                    logger.warning(f"Limiting actions from {len(parsed.action)} to {self.settings.max_actions_per_step}")
+                    parsed.action = parsed.action[: self.settings.max_actions_per_step]
+                
+                self._log_response(parsed)
+                return parsed
+                
+            except Exception as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    logger.error(f"Final failure getting next action after {retry_count} attempts: {e}")
+                    raise
+                
+                logger.warning(f"Attempt {retry_count}/{max_retries} failed: {e}. Retrying...")
+                await asyncio.sleep(1.0)  # Short delay before retry
+                
+        # This should not be reached due to the raise in the loop
+        raise ValueError("Failed to get next action after multiple attempts")
     
     def _log_response(self, response: AgentOutput) -> None:
         """Utility function to log the model's response."""
@@ -487,50 +664,116 @@ class Agent(Generic[Context]):
     @time_execution_async('--run (agent)')
     async def run(self, max_steps: int = 100) -> AgentHistoryList:
         """Execute the task with maximum number of steps"""
+        run_start_time = time.time()
+        
         try:
-            logger.info(f'🚀 Starting task: {self.task}')
+            logger.info(f'🚀 Starting agent run for task: {self.task}')
+            logger.info(f'Agent configuration: max_steps={max_steps}, max_failures={self.settings.max_failures}')
+            logger.info(f'Using model: {self.model_name} with {self.chat_model_library}')
+            logger.info(f'Tool calling method: {self.tool_calling_method}')
+            logger.info(f'Vision enabled: {self.settings.use_vision}')
 
             # Execute initial actions if provided
             if self.initial_actions:
-                result = await self.multi_act(self.initial_actions, check_for_new_elements=False)
-                self.state.last_result = result
+                logger.info(f'Executing {len(self.initial_actions)} initial actions')
+                try:
+                    result = await self.multi_act(self.initial_actions, check_for_new_elements=False)
+                    self.state.last_result = result
+                    logger.info(f'Initial actions completed with {len(result)} results')
+                except Exception as e:
+                    logger.error(f'Error executing initial actions: {e}')
+                    import traceback
+                    logger.error(f'Stack trace: {traceback.format_exc()}')
 
+            # Main agent loop
             for step in range(max_steps):
+                step_start_time = time.time()
+                logger.info(f'Starting step {step+1}/{max_steps}')
+                
                 # Check if we should stop due to too many failures
                 if self.state.consecutive_failures >= self.settings.max_failures:
-                    logger.error(f'❌ Stopping due to {self.settings.max_failures} consecutive failures')
+                    logger.error(f'❌ Stopping agent run due to {self.state.consecutive_failures}/{self.settings.max_failures} consecutive failures')
                     break
 
                 # Check control flags before each step
                 if self.state.stopped:
-                    logger.info('Agent stopped')
+                    logger.info('Agent run stopped by external signal')
                     break
 
                 while self.state.paused:
+                    logger.debug('Agent paused, waiting...')
                     await asyncio.sleep(0.2)  # Small delay to prevent CPU spinning
                     if self.state.stopped:  # Allow stopping while paused
+                        logger.info('Agent stopped while paused')
                         break
 
+                # Execute the step
+                logger.info(f'Executing step {step+1}/{max_steps}')
                 step_info = AgentStepInfo(step_number=step, max_steps=max_steps)
-                await self.step(step_info)
+                try:
+                    await self.step(step_info)
+                    step_end_time = time.time()
+                    logger.info(f'Step {step+1} completed in {step_end_time - step_start_time:.2f}s')
+                except Exception as e:
+                    logger.error(f'Error in step {step+1}: {e}')
+                    import traceback
+                    logger.error(f'Stack trace: {traceback.format_exc()}')
+                    # Continue to next step despite error
 
+                # Check if done
                 if self.state.history.is_done():
+                    logger.info(f'Agent completed task in {step+1} steps')
+                    
                     if self.settings.validate_output and step < max_steps - 1:
-                        if not await self._validate_output():
-                            continue
+                        logger.info('Validating output...')
+                        try:
+                            if not await self._validate_output():
+                                logger.info('Output validation failed, continuing execution')
+                                continue
+                            else:
+                                logger.info('Output validation successful')
+                        except Exception as e:
+                            logger.error(f'Error validating output: {e}')
+                            import traceback
+                            logger.error(f'Stack trace: {traceback.format_exc()}')
 
                     await self.log_completion()
                     break
             else:
-                logger.info('❌ Failed to complete task in maximum steps')
+                logger.warning(f'❌ Failed to complete task in maximum steps ({max_steps})')
 
+            # Log final statistics
+            run_end_time = time.time()
+            total_run_time = run_end_time - run_start_time
+            logger.info(f'Agent run completed in {total_run_time:.2f}s')
+            logger.info(f'Total steps taken: {self.state.n_steps}')
+            logger.info(f'Status: {"successful" if self.state.history.is_successful() else "incomplete"}')
+            
             return self.state.history
+            
+        except Exception as e:
+            logger.critical(f'Unhandled exception in agent run: {e}')
+            import traceback
+            logger.critical(f'Stack trace: {traceback.format_exc()}')
+            raise
+        
         finally:
+            # Always clean up resources
+            logger.info('Cleaning up agent resources')
+            
             if not self.injected_windows_context:
-                await self.windows_context.close()
+                try:
+                    logger.debug('Closing windows context')
+                    await self.windows_context.close()
+                except Exception as e:
+                    logger.error(f'Error closing windows context: {e}')
 
             if not self.injected_windows and self.windows:
-                await self.windows.close()
+                try:
+                    logger.debug('Closing windows')
+                    await self.windows.close()
+                except Exception as e:
+                    logger.error(f'Error closing windows: {e}')
 
     async def take_step(self) -> tuple[bool, bool]:
         """Take a step
@@ -706,7 +949,7 @@ class Agent(Generic[Context]):
     def _convert_initial_actions(self, actions: List[Dict[str, Dict[str, Any]]]) -> List[ActionModel]:
         """Convert dictionary-based actions to ActionModel instances"""
         converted_actions = []
-        action_model = self.ActionModel
+        action_model_class = self.ActionModel
         for action_dict in actions:
             # Each action_dict should have a single key-value pair
             action_name = next(iter(action_dict))
@@ -720,8 +963,8 @@ class Agent(Generic[Context]):
             validated_params = param_model(**params)
 
             # Create ActionModel instance with the validated parameters
-            action_model = self.ActionModel(**{action_name: validated_params})
-            converted_actions.append(action_model)
+            action_instance = action_model_class(**{action_name: validated_params})
+            converted_actions.append(action_instance)
 
         return converted_actions
     

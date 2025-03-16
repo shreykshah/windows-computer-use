@@ -32,6 +32,46 @@ class DomService:
         """
         self.window = window_control
         self.xpath_cache = {}
+        
+    def _is_control_visible(self, control: Any) -> bool:
+        """
+        Safely check if a UI Automation control is visible
+        
+        Args:
+            control: A UIAutomation control
+            
+        Returns:
+            True if the control is visible, False otherwise
+        """
+        try:
+            # First check if IsVisible attribute exists
+            if hasattr(control, 'IsVisible'):
+                return bool(control.IsVisible)
+            
+            # Alternative check if control has BoundingRectangle
+            if hasattr(control, 'BoundingRectangle'):
+                rect = control.BoundingRectangle
+                if rect:
+                    # Safely check dimensions with proper error handling
+                    try:
+                        # If rectangle has non-zero dimensions, consider it visible
+                        width = rect.right - rect.left if hasattr(rect, 'right') and hasattr(rect, 'left') else 0
+                        height = rect.bottom - rect.top if hasattr(rect, 'bottom') and hasattr(rect, 'top') else 0
+                        return width > 0 and height > 0
+                    except Exception as e:
+                        logger.debug(f"Error calculating rectangle dimensions: {e}")
+            
+            # Additional check - try getting ControlType if available
+            if hasattr(control, 'ControlType') and control.ControlType is not None:
+                return True
+                
+            # Default assumption - if we can't determine visibility, assume it's visible
+            # to avoid skipping potentially important elements
+            return True
+        except Exception as e:
+            logger.debug(f"Error checking control visibility: {e}")
+            # On exception, assume visible to avoid skipping elements
+            return True
 
     @time_execution_async('--get_clickable_elements')
     async def get_clickable_elements(
@@ -51,8 +91,32 @@ class DomService:
         Returns:
             DOMState object containing the element tree and selector map
         """
-        element_tree, selector_map = await self._build_uia_tree(highlight_elements, focus_element, viewport_expansion)
-        return DOMState(element_tree=element_tree, selector_map=selector_map)
+        try:
+            element_tree, selector_map = await self._build_uia_tree(highlight_elements, focus_element, viewport_expansion)
+            return DOMState(element_tree=element_tree, selector_map=selector_map)
+        except Exception as e:
+            logger.error(f"Failed to get clickable elements: {e}")
+            # Return a minimal valid DOM state rather than crashing
+            root_element = DOMElementNode(
+                tag_name="window",
+                xpath="/window",
+                attributes={"Name": "Error", "ControlType": "Window"},
+                children=[
+                    DOMTextNode(
+                        text=f"Error accessing UI elements: {str(e)}",
+                        xpath="/window/text",
+                        is_visible=True,
+                        parent=None
+                    )
+                ],
+                is_visible=True,
+                is_interactive=False,
+                is_top_element=True,
+                is_in_viewport=True,
+                highlight_index=None,
+                parent=None,
+            )
+            return DOMState(element_tree=root_element, selector_map={})
 
     @time_execution_async('--build_uia_tree')
     async def _build_uia_tree(
@@ -232,7 +296,7 @@ class DomService:
                 xpath=xpath,
                 attributes=attributes,
                 children=[],
-                is_visible=True if hasattr(control, 'IsVisible') and control.IsVisible else False,
+                is_visible=self._is_control_visible(control),
                 is_interactive=is_interactive,
                 is_top_element=True,  # Assuming all direct UIA controls are top elements
                 is_in_viewport=True,  # Assuming all accessible controls are in viewport

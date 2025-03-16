@@ -4,7 +4,7 @@ setup_logging()
 
 from computeruse.agent.prompts import SystemPrompt as SystemPrompt
 from computeruse.agent.service import Agent as Agent
-from computeruse.agent.views import ActionModel as ActionModel
+from computeruse.controller.registry.views import ActionModel as ActionModel
 from computeruse.agent.views import ActionResult as ActionResult
 from computeruse.agent.views import AgentHistoryList as AgentHistoryList
 from computeruse.uia.windows import Windows as Windows

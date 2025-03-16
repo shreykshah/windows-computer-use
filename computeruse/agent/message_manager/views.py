@@ -52,9 +52,48 @@ class ManagedMessage(BaseModel):
         Custom validator that uses langchain's `loads` function
         to parse the message if it is provided as a JSON string.
         """
-        if isinstance(value, dict) and 'message' in value:
-            # NOTE: We use langchain's load to convert the JSON string back into a BaseMessage object.
-            value['message'] = load(value['message'])
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            if isinstance(value, dict) and 'message' in value:
+                # NOTE: We use langchain's load to convert the JSON string back into a BaseMessage object.
+                msg_value = value['message']
+                if isinstance(msg_value, (dict, str)):
+                    try:
+                        value['message'] = load(msg_value)
+                    except Exception as load_err:
+                        logger.error(f"Error loading message with langchain load: {load_err}")
+                        # Handle dict conversion directly for common message types
+                        if isinstance(msg_value, dict) and 'type' in msg_value:
+                            msg_type = msg_value.get('type')
+                            content = msg_value.get('content', '')
+                            if msg_type == 'human':
+                                value['message'] = HumanMessage(content=content)
+                            elif msg_type == 'ai':
+                                value['message'] = AIMessage(content=content)
+                            elif msg_type == 'system':
+                                value['message'] = SystemMessage(content=content)
+                            elif msg_type == 'tool':
+                                value['message'] = ToolMessage(
+                                    content=content, 
+                                    tool_call_id=msg_value.get('tool_call_id', '1')
+                                )
+                            else:
+                                value['message'] = HumanMessage(content=f"[Conversion error for {msg_type} message]")
+                        else:
+                            value['message'] = HumanMessage(content="[Error loading serialized message]")
+                # If it's already a BaseMessage object, no need to load it
+                elif isinstance(msg_value, BaseMessage):
+                    pass
+                else:
+                    logger.warning(f"Unexpected message type: {type(msg_value)}")
+                    value['message'] = HumanMessage(content=f"[Error: unexpected message type {type(msg_value)}]")
+        except Exception as e:
+            logger.error(f"Error in message validation: {e}")
+            # If message loading fails, create a fresh message to avoid breaking the agent
+            if isinstance(value, dict):
+                value['message'] = HumanMessage(content="[Error loading previous message]")
         return value
 
 

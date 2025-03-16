@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from computeruse.dom.history_tree_processor.service import DOMHistoryElement
 from computeruse.dom.views import DOMElementNode, SelectorMap
+from computeruse.controller.registry.views import ActionModel
 
 ToolCallingMethod = Literal['function_calling', 'json_mode', 'raw', 'auto']
 
@@ -119,7 +120,7 @@ class AgentOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     current_state: AgentBrain
-    action: list[ActionModel] = Field(
+    action: list[Any] = Field(
         ...,
         description='List of actions to execute',
         json_schema_extra={'min_items': 1},  # Ensure at least one action is provided

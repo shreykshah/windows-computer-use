@@ -13,6 +13,15 @@ class WindowInfo(BaseModel):
     process_name: str
 
 
+class TabInfo(BaseModel):
+    """Represents information about a tab or window"""
+    id: int
+    title: str
+    url: Optional[str] = None
+    is_active: bool = False
+    favicon: Optional[str] = None
+
+
 @dataclass
 class WindowState(DOMState):
     """
